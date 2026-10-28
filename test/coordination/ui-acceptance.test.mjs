@@ -10,13 +10,17 @@ import { initializeSession } from '../../lib/coordination/worktrees.mjs';
 import { unfreezeFact } from '../../lib/coordination/freezes.mjs';
 
 const image = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVQIHWP4z8DwHwAFgAI/ScL/nwAAAABJRU5ErkJggg==', 'base64');
+// B-248: the validator rejects identical baseline/actual content, so the
+// fixture needs two distinct (still valid-signature) images.
+const distinctImage = Buffer.concat([image, Buffer.from([0x00, 0x01])]);
 function setup(t) {
   const { clientA: cwd } = createGitFixture(t);
   const root = 'docs/product/current/I-002-ui-acceptance';
   const imageRoot = `${root}/reviews/screenshots`;
   mkdirSync(join(cwd, imageRoot), { recursive: true });
   writeFileSync(join(cwd, root, 'UX_SPEC.md'), '# Approved UX\n');
-  for (const path of ['prototype.png', 'actual.png']) writeFileSync(join(cwd, imageRoot, path), image);
+  writeFileSync(join(cwd, imageRoot, 'prototype.png'), image);
+  writeFileSync(join(cwd, imageRoot, 'actual.png'), distinctImage);
   const freeze = { candidateId: 'candidate-1', machineVerificationEvidence: 'a'.repeat(64), mixedEnvironmentIdentity: 'b'.repeat(64) };
   const requirement = { id: 'I-002', version: 'v0.9.1', validationEpoch: 0, workflowVersion: 2, deliveryProfile: 'runtime', uxImpact: 'admin-ui', resources: { services: ['admin'] } };
   const report = { schemaVersion: 1, requirementId: requirement.id, candidateId: freeze.candidateId,
@@ -45,6 +49,13 @@ test('visual differences cannot be accepted as a match and backend-only work rem
   runGit(s.cwd, ['add', '.']); runGit(s.cwd, ['commit', '-m', 'test: visual mismatch']);
   assert.throws(() => validateUiAcceptanceReport(s), { code: 'UI_ACCEPTANCE_DIFFERENCE_OPEN' });
   assert.equal(uiAcceptanceRequired({ requirement: { ...s.requirement, uxImpact: 'none', resources: { services: ['api'] } } }), false);
+});
+
+test('B-248: a copied screenshot presented as both baseline and actual is rejected', t => {
+  const s = setup(t);
+  writeFileSync(join(s.cwd, `${'docs/product/current/I-002-ui-acceptance'}/reviews/screenshots/actual.png`), image);
+  runGit(s.cwd, ['add', '.']); runGit(s.cwd, ['commit', '-m', 'test: copied screenshot']);
+  assert.throws(() => validateUiAcceptanceReport(s), { code: 'UI_ACCEPTANCE_IDENTICAL_SCREENSHOTS' });
 });
 
 test('Testing UI acceptance is current only while the approved visual evidence hash matches', t => {

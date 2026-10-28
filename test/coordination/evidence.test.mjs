@@ -406,7 +406,7 @@ test('a second identical run reuses passed results without invoking the runner',
   );
 });
 
-test('worktree changes outside TEST_EVIDENCE.json bypass reuse without invalidating the clean cache', async (t) => {
+test('B-248: a dirty worktree refuses to run, and the clean cache survives the refusal', async (t) => {
   const context = setupEvidenceFixture(t);
   const cwd = context.fixture.clientA;
   const calls = [];
@@ -425,32 +425,32 @@ test('worktree changes outside TEST_EVIDENCE.json bypass reuse without invalidat
   assert.equal(first.evidence.outcome, 'passed');
   assert.deepEqual(calls.map(({ index }) => index), [0, 1]);
 
-  // Dirty the worktree with a real change other than this requirement's
-  // TEST_EVIDENCE.json; cached results must be neither read nor refreshed.
+  // B-248: a dirty worktree no longer re-runs silently — the recorded
+  // testedCommit would describe a tree that never exists in git, so the run
+  // is refused up front with an actionable code and nothing executes.
   const readmePath = join(cwd, 'README.md');
   const originalReadme = readFileSync(readmePath, 'utf8');
   writeFileSync(readmePath, `${originalReadme}dirty after testing\n`);
-  const dirty = await run();
-  assert.equal(dirty.evidence.outcome, 'passed');
+  await assert.rejects(run(), (error) => (
+    error.code === 'DIRTY_WORKTREE'
+      && /uncommitted or untracked changes/.test(error.message)
+  ));
   assert.deepEqual(
     calls.map(({ index }) => index),
-    [0, 1, 0, 1],
-    'a dirty worktree must re-run required commands instead of reusing the cache',
-  );
-  assert.ok(
-    dirty.evidence.commands.every(({ reused }) => reused !== true),
-    'commands re-run against a dirty worktree must not be marked reused',
+    [0, 1],
+    'a dirty worktree must not execute required commands at all',
   );
 
-  // Restoring the original content leaves only TEST_EVIDENCE.json untracked;
-  // the evidence file itself must not block reuse of the original clean cache.
+  // Restoring the original content leaves only TEST_EVIDENCE.json changed;
+  // the evidence file itself must not block reuse of the original clean cache,
+  // and the refused dirty attempt must not have poisoned it.
   writeFileSync(readmePath, originalReadme);
   const restored = await run();
   assert.equal(restored.evidence.outcome, 'passed');
   assert.deepEqual(
     calls.map(({ index }) => index),
-    [0, 1, 0, 1],
-    'a clean worktree must reuse the cache written before the dirty run',
+    [0, 1],
+    'a clean worktree must reuse the cache written before the dirty attempt',
   );
   assert.ok(
     restored.evidence.commands.every(({ reused }) => reused === true),
@@ -1292,11 +1292,16 @@ test('runtime CLI failure releases the dev lease when BACKLOG projection is unce
     session,
     clock,
   });
+  // B-248: the conflicting row must be committed — an uncommitted one now
+  // trips the evidence dirty-worktree refusal before any command runs, while
+  // this case targets the post-failure projection uncertainty path.
   writeFileSync(join(context.fixture.clientA, 'BACKLOG.md'), [
     '| I-001 | Other requirement | 否 | ⚪ Todo | - | keep unchanged |',
     '| I-057 | Evidence fixture | 否 | ⚪ Todo | v0.2.32 | conflicting projection |',
     '',
   ].join('\n'));
+  runGit(context.fixture.clientA, ['add', 'BACKLOG.md']);
+  runGit(context.fixture.clientA, ['commit', '-m', 'test: commit conflicting projection row']);
   const memory = createMemoryIo();
   const exitCode = await main(['test', 'run', 'I-057', '--json'], {
     env: { ...coordinationEnv(context), COORD_SESSION_ID: session.sessionId },

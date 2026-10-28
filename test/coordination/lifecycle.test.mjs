@@ -1750,3 +1750,60 @@ test('lifecycle next costs exactly one coordination fetch end to end', async (t)
     'fetch --force --no-tags origin +refs/heads/coordination:refs/remotes/origin/coordination',
   ]);
 });
+
+// B-248: failing while a dev freeze is awaiting human acceptance would leave
+// the freeze fact dangling — it globally blocks shared dev guard entry for
+// every requirement until manually cleared. fail must demand an explicit
+// unfreeze first.
+function b248MemoryStore(initial) {
+  const values = new Map(Object.entries(initial));
+  const snapshot = {
+    has: (path) => values.has(path),
+    readJson: (path) => structuredClone(values.get(path)),
+    writeJson: (path, value) => values.set(path, structuredClone(value)),
+  };
+  return { snapshot, update: async ({ mutate }) => {
+    mutate(snapshot);
+    return { sha: 'a'.repeat(40), operationId: 'op-b248-fail' };
+  } };
+}
+
+test('B-248: lifecycle fail refuses to run while an awaiting-human dev freeze is active', async (t) => {
+  const fixture = createGitFixture(t);
+  const clock = () => new Date('2026-10-27T00:00:00.000Z');
+  const evidenceSha = 'b'.repeat(64);
+  const reason = 'required test failed on the frozen candidate';
+
+  const validFreezeFact = {
+    schemaVersion: 1,
+    resource: 'dev',
+    state: 'awaiting_human',
+    requirementId: 'I-002',
+    version: 'v0.9.1',
+    candidateId: 'candidate-I-002-abc-def',
+    deploymentSnapshot: { commit: 'c'.repeat(40) },
+    machineVerificationEvidence: 'e'.repeat(64),
+    branch: 'feature/v0.9.1/frozen',
+    commit: 'c'.repeat(40),
+    frozenAt: '2026-10-27T00:00:00.000Z',
+    actor: { agent: 'fixture' },
+  };
+  const ownStore = b248MemoryStore({
+    'requirements/I-002.json': { id: 'I-002', lifecycle: 'test_passed', deliveryProfile: 'runtime' },
+    'freezes/dev.json': validFreezeFact,
+  });
+  await assert.rejects(
+    failLifecycle({ store: ownStore, cwd: fixture.clientA, id: 'I-002', reason, evidenceSha, clock }),
+    (error) => error.code === 'FAIL_FROZEN'
+      && error.data.requiredActions[0].includes('freeze unfreeze I-002 --outcome rejected'),
+  );
+
+  const otherStore = b248MemoryStore({
+    'requirements/I-002.json': { id: 'I-002', lifecycle: 'test_passed', deliveryProfile: 'runtime' },
+    'freezes/dev.json': { ...validFreezeFact, requirementId: 'I-003' },
+  });
+  await assert.rejects(
+    failLifecycle({ store: otherStore, cwd: fixture.clientA, id: 'I-002', reason, evidenceSha, clock }),
+    (error) => error.code === 'FAIL_FROZEN' && error.data.freezeRequirementId === 'I-003',
+  );
+});

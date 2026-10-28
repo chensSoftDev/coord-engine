@@ -112,9 +112,15 @@ test('I-243: set-migration corrects the assessment after start with an audited h
     sessionId: 'session-review-1',
   });
 
-  await assert.rejects(
-    setRequirementMigration({ store, id, migration: 'yes', reason: MIGRATION_REASON }),
-    { code: 'MIGRATION_ALREADY_SET', exitCode: 14 },
+  // B-248: a repeated correction is no longer an error — it reruns as an
+  // idempotent no-op fact write and (outside this store-only harness) the
+  // BACKLOG projection repair. The recorded history must not gain entries.
+  const repeated = await setRequirementMigration({ store, id, migration: 'yes', reason: MIGRATION_REASON });
+  assert.equal(repeated.migrationAssessment, '是');
+  const snapshotAfterRepeat = await store.readSnapshot();
+  assert.equal(
+    snapshotAfterRepeat.readJson(`requirements/${id}.json`).migrationAssessmentHistory.length,
+    1,
   );
 
   await setLifecycle(store, id, 'done');
@@ -274,6 +280,10 @@ test('I-243: CLI fact-correction commands validate options and forward the sessi
     'INVALID_MIGRATION_ASSESSMENT',
   );
 
+  const { writeFileSync: writeCli, readFileSync: readCli } = await import('node:fs');
+  const { join: joinCli } = await import('node:path');
+  const cliBacklogPath = joinCli(fixture.clientA, 'BACKLOG.md');
+  writeCli(cliBacklogPath, `${readCli(cliBacklogPath, 'utf8').trimEnd()}\n| ${id} | Fact corrections | 否 | 🔨 In Dev | v0.0.1 | fixture |\n`);
   const migrationIo = createMemoryIo();
   assert.equal(await main([
     'requirement', 'set-migration', id,
@@ -331,5 +341,51 @@ test('I-243: CLI fact-correction commands validate options and forward the sessi
       actor: 'cli-agent',
       sessionId: 'session-cli-243',
     },
+  );
+});
+
+test('B-248: set-migration projects the BACKLOG migration column and reruns as idempotent repair', async (t) => {
+  const { fixture, store, id } = await setup(t, { migration: 'no' });
+  const { writeFileSync, readFileSync } = await import('node:fs');
+  const { join } = await import('node:path');
+
+  // Simulate the worktree-create projection: the registered row carries the
+  // declared assessment in its migration column.
+  const backlogPath = join(fixture.clientA, 'BACKLOG.md');
+  const seeded = readFileSync(backlogPath, 'utf8').trimEnd();
+  writeFileSync(backlogPath, [
+    seeded,
+    `| ${id} | Fact corrections | 否 | 🔨 In Dev | v9.9.1 | fixture |`,
+    '',
+  ].join('\n'));
+
+  const corrected = await setRequirementMigration({
+    store,
+    cwd: fixture.clientA,
+    id,
+    migration: 'yes',
+    reason: MIGRATION_REASON,
+  });
+  assert.equal(corrected.migrationAssessment, '是');
+  assert.equal(corrected.projection.changed, true);
+  assert.match(
+    readFileSync(backlogPath, 'utf8'),
+    new RegExp(`\\| ${id} \\|[^|]*\\| 是 \\|`),
+  );
+
+  // A rerun after an interrupted projection is the repair: no error, no
+  // duplicate history, column stays in sync.
+  const repeated = await setRequirementMigration({
+    store,
+    cwd: fixture.clientA,
+    id,
+    migration: 'yes',
+    reason: MIGRATION_REASON,
+  });
+  assert.equal(repeated.projection.changed, false);
+  const snapshot = await store.readSnapshot();
+  assert.equal(
+    snapshot.readJson(`requirements/${id}.json`).migrationAssessmentHistory.length,
+    1,
   );
 });

@@ -135,6 +135,37 @@ test('declares resources and warns about explicit overlaps', async (t) => {
   }]);
 });
 
+test('B-248: AGENTS.md is a shared coordination document and never a resource conflict', async (t) => {
+  const fixture = createGitFixture(t);
+  const store = createStore(fixture.clientA, fixture.tempRoot);
+  await store.initialize({ fromBacklog: 'BACKLOG.md' });
+  const backlogText = '| I-001 | fixture |\n';
+  const first = await claimRequirement({
+    store, type: 'I', title: 'Protocol doc editor', profile: 'tooling', backlogText,
+  });
+  const second = await claimRequirement({
+    store, type: 'I', title: 'Another protocol doc editor', profile: 'tooling', backlogText,
+  });
+  await declareRequirementResources({
+    store, id: first.id, resources: { files: ['AGENTS.md', 'scripts/lib/x.mjs'] },
+  });
+  const result = await declareRequirementResources({
+    store, id: second.id, resources: { files: ['AGENTS.md', 'scripts/lib/x.mjs'] },
+  });
+  // AGENTS.md overlaps are dropped (same exemption as BACKLOG.md); a real
+  // shared code path still conflicts.
+  assert.equal(
+    result.warnings.some((warning) => JSON.stringify(warning.overlaps).includes('AGENTS.md')),
+    false,
+    'AGENTS.md must never appear in resource overlap warnings',
+  );
+  assert.equal(
+    result.warnings.some((warning) => JSON.stringify(warning.overlaps).includes('scripts/lib/x.mjs')),
+    true,
+    'non-exempt overlapping files still warn',
+  );
+});
+
 test('resource warnings ignore requirements whose runtime merge is already recorded', async (t) => {
   const fixture = createGitFixture(t);
   const store = createStore(fixture.clientA, fixture.tempRoot);
@@ -328,6 +359,7 @@ test('status exposes requirements, versions, and empty locks', async (t) => {
   assert.deepEqual(status.locks, {});
 });
 
+
 test('CLI imports an existing active backlog requirement from the initialization baseline', async (t) => {
   const fixture = createGitFixture(t);
   writeFileSync(join(fixture.clientA, 'BACKLOG.md'), [
@@ -476,6 +508,9 @@ test('bindRequirementBranch rejects invalid branch names and unknown requirement
   );
 });
 
+
+// I-128 (M7): status must show every blocking fact in one call, and a single
+// requirement must be queryable without pulling the full status document.
 test('status aggregates blocking facts and requirement show reads one requirement', async (t) => {
   const fixture = createGitFixture(t);
   const store = createStore(fixture.clientA, fixture.tempRoot);

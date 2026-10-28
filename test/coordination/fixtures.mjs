@@ -64,7 +64,10 @@ export function createGitFixture(t) {
   configureGit(clientA);
   writeFileSync(join(clientA, 'README.md'), '# coordination fixture\n');
   writeFileSync(join(clientA, 'BACKLOG.md'), '| I-001 | fixture |\n');
-  writeFileSync(join(clientA, '.gitignore'), '.worktrees/\n');
+  // B-248: mirror the repository's deploy-artifact ignores — deployment
+  // snapshots are runtime outputs, and the evidence dirty-tree guard must not
+  // count them any more than it does in the real checkout.
+  writeFileSync(join(clientA, '.gitignore'), '.worktrees/\ndeploy/dev-releases/\ndeploy/releases/\ndeploy/backups/\n');
   runGit(clientA, ['add', 'README.md', 'BACKLOG.md', '.gitignore']);
   runGit(clientA, ['commit', '-m', 'test: seed main']);
   runGit(clientA, ['push', '-u', 'origin', 'main']);

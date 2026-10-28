@@ -157,7 +157,7 @@ test('plan lists the full runtime path including deployment states', async (t) =
   );
   assert.equal(
     byState.done.gates,
-    'migration resolved + version bound + completion fact merged (Coordination Complete workflow)',
+    'migration resolved + version bound + completion fact merged (local plan-completion + apply-completion)',
   );
 });
 
