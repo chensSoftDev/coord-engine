@@ -2,8 +2,6 @@
 
 AI Agent 需求迭代协调引擎：BACKLOG 状态机、coordination branch 事实存储、
 worktree 并行、lease、gate/preflight、UX 门禁、completion PR 规划。
-2026-10 自 `chensSoftDev/luggage-platform` 的 `scripts/lib/coordination/` 抽取
-（需求 I-249）；抽取前的完整历史留在原仓库。
 
 零 npm 依赖（纯 Node 内置），以 git submodule 分发，不需要 install 步骤。
 
@@ -36,7 +34,7 @@ worktree 并行、lease、gate/preflight、UX 门禁、completion PR 规划。
 
 4. 部署/服务器侧：任何 `git checkout <ref>` 之后必须
    `git submodule update --init`，否则 guard/coord 入口不可用。
-5. worktree：`coord worktree create/join` 会自动 init submodule（I-249）。
+5. worktree：`coord worktree create/join` 会自动 init submodule。
 
 ## 已知项目耦合（引擎命令读取 consuming 项目内容）
 
