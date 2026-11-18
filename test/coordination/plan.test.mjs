@@ -3,7 +3,7 @@ import test from 'node:test';
 
 import { GitCoordinationStore } from '../../lib/coordination/git-store.mjs';
 import { main } from '../../lib/coordination/cli.mjs';
-import { TRANSITIONS } from '../../lib/coordination/lifecycle.mjs';
+import { TRANSITIONS, lifecycleTransitions } from '../../lib/coordination/lifecycle.mjs';
 import { PLAN_GATES } from '../../lib/coordination/commands/plan.mjs';
 import {
   bindRequirementVersion,
@@ -60,6 +60,25 @@ async function runPlan(context, id = context.id, extra = []) {
   return { exitCode, memory };
 }
 
+test('plan exposes the paused acceptance recovery and durable acceptance gate', async t => {
+  const context = await setupFixture(t, { profile: 'runtime', lifecycle: 'user_acceptance' });
+  const attemptId = 'attempt-0123456789abcdef';
+  await context.store.update({ operation: 'record paused candidate for plan', mutate(snapshot) {
+    const path = `requirements/${context.id}.json`;
+    snapshot.writeJson(path, { ...snapshot.readJson(path), workflowVersion: 2, acceptanceWorkflowVersion: 1, validationEpoch: 0, uxImpact: 'admin-ui' });
+    snapshot.writeJson(`acceptance/${context.id}/${attemptId}.json`, { requirementId: context.id, attemptId,
+      candidateId: 'candidate-1', version: 'v0.2.32', validationEpoch: 0, deploymentSnapshot: { services: ['admin'] } });
+    snapshot.writeJson(`acceptance/${context.id}/current.json`, { schemaVersion: 1, requirementId: context.id, attemptId, state: 'paused' });
+  } });
+  const { exitCode, memory } = await runPlan(context);
+  assert.equal(exitCode, 0, memory.stderr.join(''));
+  const data = JSON.parse(memory.stdout.join('')).data;
+  assert.equal(data.acceptanceRecovery.state, 'paused');
+  assert.match(data.steps[0].command, /freeze resume dev/);
+  assert.match(data.steps.find(step => step.state === 'test_passed').gates, /durable.*human acceptance/);
+  assert.doesNotMatch(data.steps.find(step => step.state === 'test_passed').gates, /lease\(dev\)/);
+});
+
 test('plan rejects an unclaimed requirement', async (t) => {
   const context = await setupFixture(t);
   const { exitCode, memory } = await runPlan(context, 'I-999');
@@ -92,7 +111,8 @@ test('plan lists the tooling path from in_dev to done', async (t) => {
   assert.equal(result.data.version, 'v0.2.32');
   assert.equal(result.data.lifecycle, 'in_dev');
   assert.equal(result.data.lifecycleLabel, '🔨 In Dev');
-  assert.deepEqual(result.data.steps, [
+  assert.ok(result.data.steps.every(step => step.work.doneWhen.length > 0));
+  assert.deepEqual(result.data.steps.map(({ work, ...step }) => step), [
     {
       state: 'in_dev',
       label: '🔨 In Dev',
@@ -189,6 +209,7 @@ test('plan of a terminal requirement is an empty path', async (t) => {
 test('the static gates table covers every reachable state of every profile', () => {
   for (const [profile, transitions] of Object.entries(TRANSITIONS)) {
     const reachable = new Set([...Object.keys(transitions), 'done']);
+    for (const state of Object.keys(lifecycleTransitions({ deliveryProfile: profile, workflowVersion: 2, acceptanceWorkflowVersion: 1, uxImpact: 'admin-ui' }))) reachable.add(state);
     for (const state of reachable) {
       const gates = PLAN_GATES[profile]?.[state];
       assert.equal(typeof gates, 'string', `${profile}:${state} has no gates annotation`);

@@ -2,6 +2,7 @@ import { execFileSync } from 'node:child_process';
 import { mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { assertIsolatedGitEnvironment } from '../../assert-isolated-test-git.mjs';
 
 export function createMemoryIo() {
   const stdout = [];
@@ -18,6 +19,9 @@ export function createMemoryIo() {
 }
 
 export function runGit(cwd, args, options = {}) {
+  // Fail before even init/config: an inherited GIT_DIR can make a temporary
+  // fixture mutate the developer's live repository despite its different cwd.
+  assertIsolatedGitEnvironment(options.env ?? process.env);
   return execFileSync('git', args, {
     cwd,
     encoding: 'utf8',
@@ -51,6 +55,7 @@ export async function cleanupFixtureRoot(root, { remove = rmSync } = {}) {
 }
 
 export function createGitFixture(t) {
+  assertIsolatedGitEnvironment(process.env);
   const root = mkdtempSync(join(tmpdir(), 'luggage-coordination-fixture-'));
   const origin = join(root, 'origin.git');
   const clientA = join(root, 'client-a');

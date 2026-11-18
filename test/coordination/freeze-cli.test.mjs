@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { writeFileSync } from 'node:fs';
+import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import test from 'node:test';
 
@@ -526,6 +526,17 @@ test('release-approval CLI fails closed in CI, without instruction ref, or witho
 
 test('candidate record/show/void expose stable JSON through the CLI', async (t) => {
   const context = await setupFreezeCliFixture(t);
+  mkdirSync(join(context.fixture.clientA, '.agents'), { recursive: true });
+  const services = {};
+  for (const service of ['web', 'admin']) {
+    mkdirSync(join(context.fixture.clientA, `apps/${service}`), { recursive: true });
+    writeFileSync(join(context.fixture.clientA, `apps/${service}/Dockerfile`), `FROM node:22-alpine\nCOPY apps/${service} ./apps/${service}\n`);
+    writeFileSync(join(context.fixture.clientA, `apps/${service}/source.js`), 'export const fixture = true;\n');
+    services[service] = { includes: [`apps/${service}/**`], excludes: [] };
+  }
+  writeFileSync(join(context.fixture.clientA, '.agents/runtime-artifact-inputs.json'), JSON.stringify({ schemaVersion: 1, services }));
+  runGit(context.fixture.clientA, ['add', '.agents', 'apps']);
+  runGit(context.fixture.clientA, ['commit', '-m', 'candidate runtime inputs']);
   runGit(context.fixture.clientA, ['push', '--set-upstream', 'origin', `HEAD:refs/heads/${context.branch}`]);
   const commit = runGit(context.fixture.clientA, ['rev-parse', 'HEAD']);
 

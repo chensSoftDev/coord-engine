@@ -5,6 +5,7 @@ import test from 'node:test';
 
 import { GitCoordinationStore } from '../../lib/coordination/git-store.mjs';
 import { main } from '../../lib/coordination/cli.mjs';
+import { BACKLOG_STATUSES } from '../../lib/coordination/lifecycle.mjs';
 import {
   bindRequirementVersion,
   claimRequirement,
@@ -41,7 +42,7 @@ async function setupFixture(t, { profile = 'tooling', migration = '否', lifecyc
       snapshot.writeJson(path, { ...snapshot.readJson(path), lifecycle });
     },
   });
-  const statusByState = { in_dev: '🔨 In Dev', testing: '🧪 Testing', done: '✔️ Done' };
+  const statusByState = BACKLOG_STATUSES;
   const targetRow = `| ${claimed.id} | Diagnostic requirement | ${migration} | ${statusByState[lifecycle]} | v0.2.32 | fixture |`;
   writeFileSync(join(fixture.clientA, 'BACKLOG.md'), [
     '| I-001 | Other requirement | 否 | ⚪ Todo | - | keep unchanged |',
@@ -85,6 +86,29 @@ async function runCli(argv, context) {
   });
   return { exitCode, memory };
 }
+
+for (const state of ['active', 'paused', 'released', 'accepted', 'reworked']) test(`what-next gives the ${state} acceptance action without pretending lifecycle next can accept it`, async t => {
+  const context = await setupFixture(t, { profile: 'runtime', lifecycle: state === 'accepted' ? 'test_passed' : state === 'reworked' ? 'in_dev' : 'user_acceptance' });
+  const attemptId = 'attempt-0123456789abcdef';
+  await context.store.update({ operation: 'record acceptance recovery fixture', mutate(snapshot) {
+    const path = `requirements/${context.id}.json`;
+    snapshot.writeJson(path, { ...snapshot.readJson(path), workflowVersion: 2, acceptanceWorkflowVersion: 1, validationEpoch: 0, uxImpact: 'admin-ui' });
+    snapshot.writeJson(`acceptance/${context.id}/${attemptId}.json`, { requirementId: context.id, attemptId,
+      candidateId: 'candidate-1', version: 'v0.2.32', validationEpoch: 0, deploymentSnapshot: { services: ['admin'] } });
+    snapshot.writeJson(`acceptance/${context.id}/current.json`, { schemaVersion: 1, requirementId: context.id, attemptId,
+      state: state === 'reworked' ? 'paused' : state, ...(state === 'reworked' ? { invalidated: true } : {}) });
+    if (state === 'accepted') snapshot.writeJson(`acceptance/${context.id}/${attemptId}-decision.json`, { outcome: 'accepted', acceptance: { authorizedBy: 'owner' } });
+  } });
+  const { exitCode, memory } = await runCli(['what-next', context.id, '--json'], context);
+  assert.equal(exitCode, 0, memory.stderr.join(''));
+  const data = JSON.parse(memory.stdout.join('')).data;
+  assert.equal(data.acceptanceRecovery.state, state);
+  if (state === 'active') assert.match(data.next.command, /freeze unfreeze dev .*--outcome accepted/);
+  if (state === 'paused') { assert.match(data.next.command, /freeze resume dev/); assert.match(data.next.preparationCommands[0], /lock acquire dev/); }
+  if (state === 'released') assert.match(data.next.command, /lifecycle rework-batch/);
+  if (['accepted', 'reworked'].includes(state)) assert.doesNotMatch(data.next.command, /freeze resume|unfreeze/);
+  assert.match(data.acceptanceRecovery.inspectCommand, new RegExp(`freeze show dev --requirement ${context.id}`));
+});
 
 test('what-next rejects an unclaimed requirement', async (t) => {
   const context = await setupFixture(t);

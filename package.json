@@ -6,8 +6,7 @@
   "description": "AI Agent 需求迭代协调引擎（BACKLOG 状态机 / coordination branch / worktree / lease / gate）",
   "scripts": {
     "coord": "node scripts/coordination.mjs",
-    "api-reference": "node scripts/generate-api-reference.mjs",
-    "test": "node --test test/coordination/"
+    "test": "node assert-isolated-test-git.mjs && node --test test/coordination/*.test.mjs"
   },
   "engines": {
     "node": ">=20"

@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { reworkTransition, reworkLifecycle } from '../../lib/coordination/rework.mjs';
+import { reworkTransition, reworkLifecycle, reworkLifecycleBatch } from '../../lib/coordination/rework.mjs';
 import { createGitFixture, runGit } from './fixtures.mjs';
 
 const reason = 'user acceptance identified a reproducible mismatch';
@@ -15,6 +15,7 @@ function memoryStore(initial) {
     has: (path) => values.has(path),
     readJson: (path) => structuredClone(values.get(path)),
     writeJson: (path, value) => values.set(path, structuredClone(value)),
+    delete: (path) => values.delete(path),
   };
   return { snapshot, update: async ({ mutate }) => {
     mutate(snapshot);
@@ -85,4 +86,55 @@ test('active acceptance freeze must be explicitly rejected before rework mutates
   });
   await assert.rejects(reworkLifecycle({ store, cwd: fixture.clientA, id: 'I-002', kind: 'correction', reason, instructionRef, clock }), { code: 'REWORK_FROZEN' });
   assert.equal(store.snapshot.readJson('requirements/I-002.json').lifecycle, 'test_passed');
+});
+
+test('one feedback batch rejects its exact candidate, routes once and replays without another epoch', async t => {
+  const { clientA: cwd } = createGitFixture(t);
+  writeFileSync(join(cwd, 'BACKLOG.md'), '| ID | 需求描述 | 需迁移 | 当前状态 | Version | 备注 |\n| I-002 | fixture | 否 | 👤 User Acceptance | v0.9.1 | fixture |\n');
+  const requirement = { id: 'I-002', lifecycle: 'user_acceptance', workflowVersion: 2, acceptanceWorkflowVersion: 1,
+    workflowEpoch: 2, validationEpoch: 4, version: 'v0.9.1' };
+  const store = memoryStore({ 'requirements/I-002.json': requirement,
+    'freezes/dev.json': { requirementId: 'I-002', candidateId: 'candidate-1' },
+    'ux-approvals/I-002.json': { revoked: false },
+  });
+  const batch = { schemaVersion: 1, batchId: 'BATCH-001', candidateId: 'candidate-1', reason, instructionRef,
+    items: [{ feedbackId: 'FB-001', kind: 'correction' }, { feedbackId: 'FB-002', kind: 'design' }] };
+  const result = await reworkLifecycleBatch({ store, cwd, id: 'I-002', batch, clock });
+  assert.equal(result.lifecycle, 'tech_design');
+  assert.equal(store.snapshot.has('freezes/dev.json'), false);
+  assert.equal(store.snapshot.readJson('ux-approvals/I-002.json').revoked, false);
+  const before = store.snapshot.readJson('requirements/I-002.json');
+  const replay = await reworkLifecycleBatch({ store, cwd, id: 'I-002', batch, clock });
+  assert.equal(replay.reused, true);
+  assert.deepEqual(store.snapshot.readJson('requirements/I-002.json'), before);
+  await assert.rejects(reworkLifecycleBatch({ store, cwd, id: 'I-002', batch: { ...batch, reason: 'A different meaning cannot replace a recorded batch' }, clock }), { code: 'REWORK_BATCH_CONFLICT' });
+
+  // A retry days later must neither re-run its transition nor project its old
+  // target over the current state after normal development has continued.
+  store.snapshot.writeJson('requirements/I-002.json', { ...before, lifecycle: 'testing' });
+  writeFileSync(join(cwd, 'BACKLOG.md'), '| ID | 需求描述 | 需迁移 | 当前状态 | Version | 备注 |\n| I-002 | fixture | 否 | 🧪 Testing | v0.9.1 | fixture |\n');
+  const lateReplay = await reworkLifecycleBatch({ store, cwd, id: 'I-002', batch, clock });
+  assert.equal(lateReplay.reused, true);
+  assert.equal(lateReplay.lifecycle, 'testing');
+  assert.match(readFileSync(join(cwd, 'BACKLOG.md'), 'utf8'), /🧪 Testing/);
+});
+
+for (const state of ['paused', 'accepted']) test(`a ${state} durable acceptance candidate remains bound to its classified feedback`, async t => {
+  const { clientA: cwd } = createGitFixture(t);
+  const attemptId = 'attempt-0123456789abcdef';
+  const lifecycle = state === 'accepted' ? 'test_passed' : 'user_acceptance';
+  writeFileSync(join(cwd, 'BACKLOG.md'), `| ID | 需求描述 | 需迁移 | 当前状态 | Version | 备注 |\n| I-002 | fixture | 否 | ${state === 'accepted' ? '✅ Test Passed' : '👤 User Acceptance'} | v0.9.1 | fixture |\n`);
+  const store = memoryStore({
+    'requirements/I-002.json': { id: 'I-002', lifecycle, workflowVersion: 2, acceptanceWorkflowVersion: 1 },
+    'acceptance/I-002/current.json': { schemaVersion: 1, requirementId: 'I-002', attemptId, state },
+    [`acceptance/I-002/${attemptId}.json`]: { requirementId: 'I-002', attemptId, candidateId: 'candidate-durable' },
+    ...(state === 'accepted' ? { [`acceptance/I-002/${attemptId}-decision.json`]: { outcome: 'accepted', acceptance: { instructionRef } } } : {}),
+  });
+  const batch = { schemaVersion: 1, batchId: 'BATCH-DURABLE', candidateId: 'candidate-other', reason, instructionRef,
+    items: [{ feedbackId: 'FB-001', kind: 'correction' }] };
+  await assert.rejects(reworkLifecycleBatch({ store, cwd, id: 'I-002', batch, clock }), { code: 'REWORK_CANDIDATE_MISMATCH' });
+  assert.equal(store.snapshot.readJson('requirements/I-002.json').lifecycle, lifecycle);
+  const result = await reworkLifecycleBatch({ store, cwd, id: 'I-002', batch: { ...batch, candidateId: 'candidate-durable' }, clock });
+  assert.equal(result.lifecycle, 'in_dev');
+  assert.equal(store.snapshot.readJson('acceptance/I-002/current.json').invalidated, true);
 });

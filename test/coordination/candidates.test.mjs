@@ -1,5 +1,9 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { mkdirSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import candidateCommand from '../../lib/coordination/commands/candidate.mjs';
+import { initializeSession } from '../../lib/coordination/worktrees.mjs';
 
 import { GitCoordinationStore } from '../../lib/coordination/git-store.mjs';
 import {
@@ -331,4 +335,29 @@ test('assertCandidateMergeEquivalent accepts an unchanged merge and rejects chan
     }),
     (error) => error.code === 'CANDIDATE_NOT_FOUND' && error.exitCode === 14,
   );
+});
+
+
+test('candidate CLI computes real Git inputs and rejects changed or missing release source', async t => {
+  const c = await setupCandidateFixture(t);
+  const cwd = c.fixture.clientA;
+  mkdirSync(join(cwd, '.agents'), { recursive: true });
+  mkdirSync(join(cwd, 'apps/api'), { recursive: true });
+  writeFileSync(join(cwd, '.agents/runtime-artifact-inputs.json'), JSON.stringify({ schemaVersion: 1, services: { api: { includes: ['apps/api/**'], excludes: [] } } }));
+  writeFileSync(join(cwd, 'apps/api/Dockerfile'), 'FROM node:22-alpine\nCOPY apps/api ./apps/api\n');
+  writeFileSync(join(cwd, 'apps/api/source.js'), 'export const value = 1;\n');
+  runGit(cwd, ['add', '.agents', 'apps']); runGit(cwd, ['commit', '-m', 'runtime source']);
+  const source = fullCommit(cwd);
+  runGit(cwd, ['push', 'origin', 'HEAD']);
+  const session = initializeSession({ cwd, agent: 'codex', user: 'test', host: 'fixture', clock: c.clock });
+  const ctx = { cwd, clock: c.clock, env: { COORD_CWD: cwd, COORD_REMOTE: 'origin', COORD_BRANCH: 'coordination', COORD_TEMP_ROOT: c.fixture.tempRoot, COORD_SESSION_ID: session.sessionId } };
+  const recorded = await candidateCommand.subcommands.find(x => x.key === 'candidate record').handler({ ctx, parsed: { positionals: ['record', c.id], options: { ref: source, service: ['api'] } } });
+  assert.match(recorded.data.runtimeInputs.api ?? '', /^[a-f0-9]{64}$/);
+  const check = releaseCommit => candidateCommand.subcommands.find(x => x.key === 'candidate assert-equivalent').handler({ ctx, parsed: { positionals: ['assert-equivalent', c.id], options: { candidate: recorded.data.candidateId, 'release-commit': releaseCommit } } });
+  await check(source);
+  writeFileSync(join(cwd, 'README.md'), '# docs-only update\n'); runGit(cwd, ['add', 'README.md']); runGit(cwd, ['commit', '-m', 'docs']);
+  await check(fullCommit(cwd));
+  writeFileSync(join(cwd, 'apps/api/source.js'), 'export const value = 2;\n'); runGit(cwd, ['add', 'apps']); runGit(cwd, ['commit', '-m', 'changed runtime']);
+  await assert.rejects(check(fullCommit(cwd)), error => error.code === 'CANDIDATE_RUNTIME_INPUT_MISMATCH');
+  await assert.rejects(check('f'.repeat(40)));
 });

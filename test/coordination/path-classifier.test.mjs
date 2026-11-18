@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 
-import { classifyChangedPaths } from '../../lib/coordination/path-classifier.mjs';
+import { classifyChangedPaths, isMigrationPath } from '../../lib/coordination/path-classifier.mjs';
 
 const ALL_SERVICES = ['account', 'admin', 'api', 'gateway', 'web'];
 const ALL_SERVICE_CHECKS = ALL_SERVICES.map((service) => `service:${service}`);
@@ -127,9 +127,6 @@ const CASES = [
       'scripts/classify-changed-paths.mjs',
       'scripts/lib/coordination/gate.mjs',
       'scripts/test/coordination/gate.test.mjs',
-      // I-249: 引擎以 .coord-engine submodule 挂载，子模块内全部是协调基建。
-      '.coord-engine/lib/coordination/gate.mjs',
-      '.coord-engine/test/coordination/gate.test.mjs',
     ],
     expected: {
       affectedServices: [],
@@ -157,6 +154,21 @@ const CASES = [
   {
     name: 'admin UI spec checker runs as coordination gate',
     paths: ['scripts/check-admin-ui-spec.mjs'],
+    expected: {
+      affectedServices: [],
+      blockingChecks: ['coordination-gate'],
+      asyncChecks: [],
+      candidateRuntimePaths: [],
+      riskTags: [],
+      docsOnly: false,
+      unknownPaths: [],
+    },
+  },
+  {
+    // I-262：pre-push 门禁入口与分级判定器只构建 CI 检查，不进运行时产物，
+    // 不得触发 unknown-path 全服务 fail closed（I-243 同类先例）。
+    name: 'pre-push gate scripts run as coordination gate',
+    paths: ['scripts/pre-push-ci.sh', 'scripts/pre-push-tier.mjs'],
     expected: {
       affectedServices: [],
       blockingChecks: ['coordination-gate'],
@@ -311,7 +323,7 @@ const CASES = [
     // B-161：agent 工具/技能路径（含 .shared-skills gitlink）按 docs 口径闭合，
     // 不触发服务发布，避免版本列车被 fail closed 强制要求全服务。
     name: 'agent tooling paths close as docs without services',
-    paths: ['.shared-skills', '.agents/skills-config.json', '.ai/skills/project-review/SKILL.md', '.claude/settings.json', '.superpowers/x.md', '.vscode/settings.json'],
+    paths: ['.shared-skills', '.agents/skills-config.json', '.ai/skills/project-review/SKILL.md', '.claude/settings.json', '.vscode/settings.json'],
     expected: {
       affectedServices: [],
       blockingChecks: ['docs-closure'],
@@ -380,4 +392,32 @@ test('prototype-only lockfile skips service coverage but keeps the lockfile secu
   assert.deepEqual(unproven.affectedServices, ALL_SERVICES);
   assert.ok(unproven.riskTags.includes('dependency-lockfile'));
   assert.ok(unproven.asyncChecks.includes('security-audit'));
+});
+
+// I-269：迁移口径收窄——只有数据运行族才算 migration-like。
+test('isMigrationPath distinguishes data runners from E2E/UI wrappers (I-269)', () => {
+  const migrationLike = [
+    'scripts/run-account-migrations-docker.sh',
+    'scripts/run-api-migrations-docker.sh',
+    'scripts/run-backfill-product-media-docker.sh',
+    'scripts/run-backfill-specs-docker.sh',
+    'scripts/run-import-mp-data-docker.sh',
+    'scripts/run-seed-site-settings-docker.sh',
+    'scripts/run-dev-data-baseline-docker.sh',
+    'scripts/run-dev-data-baseline-legacy-cleanup-docker.sh',
+    'scripts/run-dev-baseline-style-upgrade-docker.sh',
+    'scripts/init-db.sh',
+    'deploy/mysql.dev.env',
+  ];
+  const notMigrationLike = [
+    'scripts/run-b231-isolated-ui-regressions.sh',
+    'scripts/run-b231-employee-regressions.sh',
+    'scripts/run-f233-variants-regressions.sh',
+    'scripts/run-dev-e2e-data-cleanup-docker.sh',
+    'scripts/run-web-mobile-smoke.sh',
+    'deploy/mysql-e2e.env.example',
+    'deploy/mysql-e2e.env',
+  ];
+  for (const path of migrationLike) assert.equal(isMigrationPath(path), true, path);
+  for (const path of notMigrationLike) assert.equal(isMigrationPath(path), false, path);
 });

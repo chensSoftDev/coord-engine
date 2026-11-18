@@ -1,53 +1,12 @@
 # coord-engine
 
-AI Agent 需求迭代协调引擎：BACKLOG 状态机、coordination branch 事实存储、
-worktree 并行、lease、gate/preflight、UX 门禁、completion PR 规划。
+协调引擎由项目以 Git 子模块固定版本。引擎包含需求状态机、协调事实存储、worktree、lease、发布门禁和测试证据。
 
-零 npm 依赖（纯 Node 内置），以 git submodule 分发，不需要 install 步骤。
+## 项目接入
 
-## 集成契约（consuming 项目）
+- 将子模块检出到项目根目录的 `.coord-engine`。协调守卫以消费项目根目录为信任边界。
+- 通过项目的 `pnpm coord` 使用 CLI，通过 `pnpm coord:api-reference --check` 检查项目 API 参考文档。
+- 项目在新 clone、worktree 及发布候选或 tag 检出时初始化固定提交。先提交引擎，再在项目仓库更新子模块指针。
+- 从项目根运行 `pnpm test:coordination`，同时运行引擎测试与项目契约测试。单独开发引擎时可从本仓根运行 `pnpm test`。
 
-1. 以 submodule 挂载到项目根：`git submodule add <url> .coord-engine`
-   —— 路径必须是仓库根下的一级目录：引擎的 PROJECT_ROOT 自路径推导以
-   `.coord-engine/lib/coordination/commands/` 的深度为兜底。
-2. 项目侧保留薄 shim `scripts/coordination.mjs`：
-
-   ```js
-   #!/usr/bin/env node
-   import { main } from '../.coord-engine/lib/coordination/cli.mjs';
-   process.exitCode = await main(process.argv.slice(2));
-   ```
-
-   项目脚本（guard.sh、playwright-guard、package.json 的 `coord` 命令）继续
-   引用 `scripts/coordination.mjs`，不感知引擎位置。
-3. `package.json` 接线：
-
-   ```json
-   {
-     "scripts": {
-       "coord": "node scripts/coordination.mjs",
-       "coord:api-reference": "node .coord-engine/scripts/generate-api-reference.mjs",
-       "test:coordination": "node --test scripts/test/coordination/*.test.mjs .coord-engine/test/coordination/*.test.mjs"
-     }
-   }
-   ```
-
-4. 部署/服务器侧：任何 `git checkout <ref>` 之后必须
-   `git submodule update --init`，否则 guard/coord 入口不可用。
-5. worktree：`coord worktree create/join` 会自动 init submodule。
-
-## 已知项目耦合（引擎命令读取 consuming 项目内容）
-
-- `coord manifest init` 模板：`deploy/release-manifests/_example.env`
-- `coord migration draft` 模板：`docs/releases/_TEMPLATE/MIGRATION.md`
-- `.github/workflows/*` 契约与真实历史锚定的 completion 测试留在项目仓库
-  （`scripts/test/coordination/`），由项目侧 `test:coordination` 一并执行
-
-## 开发
-
-```sh
-node --test test/coordination/*.test.mjs   # 或 pnpm test
-node scripts/coordination.mjs --help
-```
-
-版本随 consuming 项目的 submodule 指针浮动，暂不独立发版。
+发布模板、业务迁移草稿和项目契约由消费项目提供。共享 E2E 覆盖校验由引擎提供，消费项目负责运行 Playwright 和配置测试环境。

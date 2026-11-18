@@ -54,8 +54,12 @@ test('stores tool-neutral sessions in the Git common dir only', async (t) => {
       clock: () => new Date('2026-07-17T00:00:00.000Z'),
     });
     assert.match(session.sessionId, /^[0-9a-f-]{36}$/);
-    assert.deepEqual(loadSession({ cwd: fixture.clientA, sessionId: session.sessionId }), session);
-    assert.equal(JSON.stringify(session).includes('token'), false);
+    // I-247：第二次 init 起返回值携带指针覆盖 warnings；持久化文件保持干净
+    // schema（warnings 只随命令结果返回，不落盘）。
+    const { warnings, ...persisted } = session;
+    assert.deepEqual(loadSession({ cwd: fixture.clientA, sessionId: session.sessionId }), persisted);
+    assert.ok(!warnings || (Array.isArray(warnings) && warnings.length === 1));
+    assert.equal(JSON.stringify(persisted).includes('token'), false);
   }
 
   assert.equal(runGit(fixture.clientA, ['status', '--short']), before);
@@ -110,7 +114,7 @@ test('creates a bound feature worktree without switching the caller branch', asy
     session,
   });
 
-  assert.equal(result.branch, 'feature/v0.2.32/cross-agent-coordination');
+  assert.equal(result.branch, `feature/${id}/cross-agent-coordination`);
   assert.equal(existsSync(result.path), true);
   assert.equal(runGit(result.path, ['branch', '--show-current']), result.branch);
   assert.equal(runGit(fixture.clientA, ['branch', '--show-current']), originalBranch);
@@ -159,7 +163,7 @@ test('recovers a worktree created before coordination and local binding were wri
     cwd: fixture.clientA, agent: 'codex', user: 'developer', host: 'workstation',
   });
   const topic = 'crash-window';
-  const branch = `feature/v0.2.32/${topic}`;
+  const branch = `feature/${id}/${topic}`;
   const path = join(fixture.clientA, '.worktrees', `${id}-${topic}`);
   runGit(fixture.clientA, ['fetch', 'origin', 'main']);
   runGit(fixture.clientA, ['worktree', 'add', '-b', branch, path, 'origin/main']);
@@ -348,9 +352,9 @@ test('requirement start CLI composes claim, version binding, branch and worktree
   const data = JSON.parse(memory.stdout.join('')).data;
   assert.equal(data.id, 'I-002');
   assert.equal(data.version, 'v0.9.0');
-  assert.equal(data.branch, 'feature/v0.9.0/cli-start');
+  assert.equal(data.branch, 'feature/I-002/cli-start');
   assert.equal(data.migrationAssessment, '是');
-  assert.equal(data.worktree.branch, 'feature/v0.9.0/cli-start');
+  assert.equal(data.worktree.branch, 'feature/I-002/cli-start');
 
   const snapshot = await store.readSnapshot();
   const requirement = snapshot.readJson('requirements/I-002.json');
@@ -363,13 +367,13 @@ test('requirement start CLI composes claim, version binding, branch and worktree
   );
   assert.equal(requirement.migrationAssessment, '是');
   assert.equal(requirement.version, 'v0.9.0');
-  assert.equal(requirement.branch, 'feature/v0.9.0/cli-start');
+  assert.equal(requirement.branch, 'feature/I-002/cli-start');
   assert.deepEqual(snapshot.readJson('versions/v0.9.0.json').requirements, ['I-002']);
 
   assert.equal(existsSync(data.worktree.path), true);
   assert.equal(
     runGit(data.worktree.path, ['branch', '--show-current']),
-    'feature/v0.9.0/cli-start',
+    'feature/I-002/cli-start',
   );
   // The BACKLOG row projects the declared migration assessment and the in_dev
   // landing state (E2) — neither 待评审 nor ⚪ Todo.
@@ -475,4 +479,44 @@ test('worktree create keeps the 待评审 fallback without migrationAssessment',
     readFileSync(join(created.path, 'BACKLOG.md'), 'utf8'),
     new RegExp(`\\| ${id} \\| Legacy claim path \\| 待评审 \\| ⚪ Todo \\| v0\\.2\\.32 \\|`),
   );
+});
+
+// ============================================================================
+// I-247（2026-10-31 生产事故）：session init 无条件覆盖共享 sessions/current
+// 指针，曾静默劫持并行会话经由该指针解析的 lease 身份。覆盖语义保持不变，
+// 但覆盖其他会话持有的指针时必须随命令结果返回告警文本。
+// ============================================================================
+test('session init warns when overwriting the current pointer held by another session', async (t) => {
+  const fixture = createGitFixture(t);
+  const first = initializeSession({
+    cwd: fixture.clientA, agent: 'codex', user: 'developer', host: 'workstation',
+  });
+  // 首个会话没有指针可覆盖，返回值不应携带 warnings。
+  assert.equal(first.warnings, undefined);
+
+  const second = initializeSession({
+    cwd: fixture.clientA, agent: 'kimi', user: 'developer', host: 'workstation',
+  });
+  // 覆盖照旧发生（既有语义），但结果携带可操作的告警。
+  assert.equal(loadSession({ cwd: fixture.clientA }).sessionId, second.sessionId);
+  assert.ok(Array.isArray(second.warnings) && second.warnings.length === 1, 'overwriting init returns a warning');
+  assert.match(second.warnings[0], new RegExp(first.sessionId));
+  assert.match(second.warnings[0], /codex/);
+  assert.match(second.warnings[0], /current 指针将被覆盖/);
+  assert.match(second.warnings[0], /COORD_SESSION_ID/);
+  // 持久化的会话文件保持干净 schema：warnings 不落盘。
+  assert.equal('warnings' in loadSession({ cwd: fixture.clientA, sessionId: second.sessionId }), false);
+
+  // CLI --json 输出（session init 的 data 即 initializeSession 返回值）同样
+  // 携带告警文本，保证操作者能在命令结果里看到。
+  const memory = createMemoryIo();
+  const exitCode = await main(['session', 'init', '--agent', 'claude-code', '--user', 'developer', '--json'], {
+    ...memory.io,
+    env: { COORD_CWD: fixture.clientA, COORD_HOST: 'workstation' },
+  });
+  assert.equal(exitCode, 0, memory.stderr.join(''));
+  const output = JSON.parse(memory.stdout.join(''));
+  assert.match(output.data.warnings[0], /current 指针将被覆盖/);
+  assert.match(output.data.warnings[0], new RegExp(second.sessionId));
+  assert.match(output.data.warnings[0], /kimi/);
 });

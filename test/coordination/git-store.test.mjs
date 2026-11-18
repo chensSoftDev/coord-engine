@@ -275,6 +275,35 @@ test('initialization cannot read a backlog outside the repository root', async (
 // I-127: the batch loader (ls-tree -z + cat-file --batch) must reproduce the
 // old per-file `git show` results exactly, including multibyte content whose
 // byte length differs from its UTF-16 length.
+test('loads every snapshot file when the real tree listing exceeds 1 MiB', async (t) => {
+  const fixture = createGitFixture(t);
+  const schema = '{"schemaVersion":2,"initializedAt":"2026-07-17T00:00:00.000Z"}\n';
+  const content = '{"title":"完整协调快照 🚀"}\n';
+  const blob = value => runGit(fixture.clientA, ['hash-object', '-w', '--stdin'], {
+    input: value, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const schemaBlob = blob(schema);
+  const stateBlob = blob(content);
+  const paths = Array.from({ length: 4500 }, (_, index) => `state-${String(index).padStart(5, '0')}-${'x'.repeat(180)}.json`);
+  // Construct the tree directly: this needs two blobs and one commit, without
+  // materializing thousands of working files or creating thousands of commits.
+  const tree = runGit(fixture.clientA, ['mktree'], {
+    input: [`100644 blob ${schemaBlob}\tschema.json`, ...paths.map(path => `100644 blob ${stateBlob}\t${path}`)].join('\n') + '\n',
+    stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  const sha = runGit(fixture.clientA, ['commit-tree', tree, '-m', 'large coordination listing']);
+  const listing = execFileSync('git', ['ls-tree', '-r', '-z', sha], {
+    cwd: fixture.clientA, maxBuffer: 64 * 1024 * 1024,
+  });
+  assert.ok(listing.length > 1024 * 1024, `fixture tree listing is only ${listing.length} bytes`);
+  t.diagnostic(`real ls-tree output: ${listing.length} bytes; ${paths.length + 1} snapshot files`);
+  const snapshot = await createStore(fixture.clientA, fixture.tempRoot, { reuseSha: sha }).readSnapshot();
+  assert.deepEqual(snapshot.paths(), ['schema.json', ...paths].sort());
+  assert.equal(snapshot.readText('schema.json'), schema);
+  for (const path of paths) assert.equal(snapshot.readText(path), content, `missing or truncated file: ${path}`);
+  assertNoStoreTemps(fixture.tempRoot);
+});
+
 test('batch snapshot loading matches git show byte-for-byte', async (t) => {
   const fixture = createGitFixture(t);
   const store = createStore(fixture.clientA, fixture.tempRoot);

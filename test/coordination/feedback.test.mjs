@@ -21,6 +21,25 @@ function seed(cwd, { decision = 'accepted' } = {}) {
 function commit(cwd) { runGit(cwd, ['add', '.']); runGit(cwd, ['commit', '-m', 'test: feedback artifacts']); }
 const requirement = { id: 'I-002', workflowVersion: 2 };
 
+test('correction observations retain UX decisions but must reference an unchanged accepted expectation', (t) => {
+  const { clientA: cwd } = createGitFixture(t);
+  const { feedback } = seed(cwd);
+  const original = protocol.inspectFeedbackArtifacts({ cwd, id: requirement.id }).fingerprint;
+  feedback.items.push({ id: 'OBS-001', observes: 'FB-001', kind: 'correction', source: 'review:save-regression', decision: 'accepted', expected: feedback.items[0].expected, actual: 'Save discarded the value.' });
+  writeFileSync(join(cwd, doc, 'FEEDBACK.json'), JSON.stringify(feedback)); commit(cwd);
+  const observed = protocol.inspectFeedbackArtifacts({ cwd, id: requirement.id });
+  assert.equal(observed.definitionsOk, true);
+  assert.equal(observed.fingerprint, original);
+  assert.equal(protocol.evaluateFeedbackReadiness({ cwd, requirement, stage: 'implementation' }).ok, false, 'observation still needs implementation and verification mappings');
+  feedback.items[1].expected = 'Changed business expectation';
+  writeFileSync(join(cwd, doc, 'FEEDBACK.json'), JSON.stringify(feedback)); commit(cwd);
+  assert.equal(protocol.inspectFeedbackArtifacts({ cwd, id: requirement.id }).definitionsOk, false);
+  feedback.items[1].expected = feedback.items[0].expected;
+  feedback.items[1].observes = 'OBS-001';
+  writeFileSync(join(cwd, doc, 'FEEDBACK.json'), JSON.stringify(feedback)); commit(cwd);
+  assert.equal(protocol.inspectFeedbackArtifacts({ cwd, id: requirement.id }).definitionsOk, false);
+});
+
 test('accepted feedback requires stage mappings and every accepted ID in review coverage', (t) => {
   assert.equal(typeof protocol.evaluateFeedbackReadiness, 'function', 'feedback readiness evaluator is implemented');
   const { clientA: cwd } = createGitFixture(t);

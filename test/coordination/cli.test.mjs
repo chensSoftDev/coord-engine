@@ -31,7 +31,10 @@ test('exit codes are stable', () => {
 
 test('recognizes every planned top-level command', () => {
   assert.deepEqual([...COMMANDS].sort(), [
+    'backlog',
+    'branch',
     'candidate',
+    'closure',
     'deployment',
     'doctor',
     'environment',
@@ -52,10 +55,13 @@ test('recognizes every planned top-level command', () => {
     'requirement',
     'review',
     'session',
+    'stats',
     'status',
     'telemetry',
     'test',
+    'train',
     'ux',
+    'version',
     'what-next',
     'worktree',
   ]);

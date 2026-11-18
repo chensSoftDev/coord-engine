@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { mkdirSync, writeFileSync } from 'node:fs';
+import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 import { GitCoordinationStore } from '../../lib/coordination/git-store.mjs';
@@ -72,6 +72,9 @@ test('approval binds a user reference, version and committed fingerprint; revoke
   assert.equal(transitionBefore.missing.some(({ code }) => code === 'obtain_ux_approval'), true);
   const fact = await recordUxApproval({ store, cwd: fixture.clientA, id, authorizedBy: 'owner', instructionRef: 'user-message:20261015-approval', session, clock });
   assert.equal(fact.version, 'v0.9.1');
+  // I-254: the fixture still carries src/scenarios/index.ts, so the approval
+  // is recorded under the legacy whole-prototype fingerprint scheme.
+  assert.equal(fact.scheme, 'v1-scenarios');
   assert.equal(evaluateUxReadiness({ snapshot: await store.readSnapshot(), cwd: fixture.clientA, requirement: { id, uxImpact: 'admin-ui', version: 'v0.9.1' } }).ok, true);
   const transitionAfter = evaluateTransitionPrecheck({
     snapshot: await store.readSnapshot(), cwd: fixture.clientA, id, to: 'tech_design',
@@ -143,6 +146,36 @@ test('workflow v2 UX approval binds feedback definitions but allows traceability
     { id: 'FB-001', source: 'user-message:feedback-001', decision: 'accepted', expected: 'Save keeps entered data and shows a toast.' },
   ] }));
   runGit(cwd, ['add', '.']); runGit(cwd, ['commit', '-m', 'test: change feedback decision']);
+  assert.deepEqual(evaluateUxReadiness({ snapshot: await store.readSnapshot(), cwd, requirement }).missing, ['refresh_ux_approval']);
+});
+
+test('v1 approvals are grandfathered once the living prototype retires scenarios', async (t) => {
+  const { fixture, store, id, session, clock } = await setup(t);
+  const cwd = fixture.clientA;
+  const requirement = { id, uxImpact: 'admin-ui', version: 'v0.9.1' };
+  await recordUxApproval({ store, cwd, id, authorizedBy: 'owner', instructionRef: 'user-message:20261015-approval', session, clock });
+  // I-254: the scenario world disappears and this requirement never gains a
+  // v2 declaration — the recorded v1 fingerprint is unrecomputable.
+  rmSync(join(cwd, 'apps/ux-prototype/src/scenarios'), { recursive: true, force: true });
+  runGit(cwd, ['add', '.']);
+  runGit(cwd, ['commit', '-m', 'test: retire scenarios']);
+  const grandfathered = evaluateUxReadiness({ snapshot: await store.readSnapshot(), cwd, requirement });
+  assert.equal(grandfathered.ok, true);
+  assert.equal(grandfathered.grandfathered, true);
+  assert.equal(grandfathered.grandfatherReason, 'prototype restructured by I-254; v1 approval predates focus-scheme');
+  // Grandfathering only waives the fingerprint comparison; a new version or
+  // an unreachable approval commit still demands a fresh approval.
+  assert.deepEqual(evaluateUxReadiness({
+    snapshot: await store.readSnapshot(), cwd,
+    requirement: { id, uxImpact: 'admin-ui', version: 'v0.9.2' },
+  }).missing, ['refresh_ux_approval']);
+  await store.update({
+    operation: 'test unreachable UX approval commit',
+    mutate(snapshot) {
+      const path = `ux-approvals/${id}.json`;
+      snapshot.writeJson(path, { ...snapshot.readJson(path), approvedCommit: 'a'.repeat(40) });
+    },
+  });
   assert.deepEqual(evaluateUxReadiness({ snapshot: await store.readSnapshot(), cwd, requirement }).missing, ['refresh_ux_approval']);
 });
 

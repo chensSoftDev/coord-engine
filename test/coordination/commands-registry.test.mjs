@@ -28,15 +28,24 @@ import telemetryCommand from '../../lib/coordination/commands/telemetry.mjs';
 import testCommand from '../../lib/coordination/commands/test.mjs';
 import whatNextCommand from '../../lib/coordination/commands/what-next.mjs';
 import worktreeCommand from '../../lib/coordination/commands/worktree.mjs';
+import branchCommand from '../../lib/coordination/commands/branch.mjs';
+import versionCommand from '../../lib/coordination/commands/version.mjs';
+import trainCommand from '../../lib/coordination/commands/train.mjs';
 import uxCommand from '../../lib/coordination/commands/ux.mjs';
 import reviewCommand from '../../lib/coordination/commands/review.mjs';
 import environmentCommand from '../../lib/coordination/commands/environment.mjs';
+import backlogCommand from '../../lib/coordination/commands/backlog.mjs';
+import statsCommand from '../../lib/coordination/commands/stats.mjs';
+import closureCommand from '../../lib/coordination/commands/closure.mjs';
 
 // I-132 (F1): the registry must cover exactly the expected command set —
 // no more, no less. The list started as the pre-split command set; F3/F4
 // appended the new what-next and plan modules.
 const MODULES = [
   ...miscCommands,
+  backlogCommand,
+  statsCommand,
+  closureCommand,
   candidateCommand,
   deploymentCommand,
   evidenceCommand,
@@ -52,6 +61,9 @@ const MODULES = [
   telemetryCommand,
   testCommand,
   worktreeCommand,
+  branchCommand,
+  versionCommand,
+  trainCommand,
   uxCommand,
   reviewCommand,
   environmentCommand,
@@ -72,6 +84,9 @@ const MODULES = [
 // declare-resources --auto, requirement cancel):
 // it is the current contract, not a historical snapshot.
 const ORIGINAL_COMMAND_OPTION_WHITELIST = new Map(Object.entries({
+  'backlog generate': ['check'],
+  stats: [],
+  'closure sweep': [],
   init: [],
   doctor: [],
   status: [],
@@ -80,6 +95,16 @@ const ORIGINAL_COMMAND_OPTION_WHITELIST = new Map(Object.entries({
   'session show': [],
   'worktree create': ['topic'],
   'worktree join': ['path'],
+  'branch audit': [],
+  'version issue record': ['file'],
+  'version issue update': ['status', 'note', 'root-cause', 'decision', 'fix-requirement', 'evidence', 'command', 'verified-at'],
+  'version issue list': [],
+  'train create': ['base'],
+  'train add': [],
+  'train candidate': ['commit'],
+  'train promote': ['commit'],
+  'train show': [],
+  'train close': [],
   'requirement claim': ['type', 'title', 'profile', 'ux-impact', 'migration'],
   'requirement start': ['type', 'title', 'profile', 'ux-impact', 'topic', 'migration', 'version', 'bump', 'join-version'],
   'requirement set-ux-impact': ['reason'],
@@ -103,7 +128,8 @@ const ORIGINAL_COMMAND_OPTION_WHITELIST = new Map(Object.entries({
   'lock assert': ['requirement', 'commit'],
   'lock release': [],
   'lock break': ['reason', 'force'],
-  'freeze show': [],
+  'freeze show': ['requirement'],
+  'freeze resume': ['requirement', 'base-url'],
   'freeze enter': ['requirement', 'candidate', 'deployment-snapshot', 'evidence'],
   'freeze unfreeze': ['requirement', 'outcome', 'reason', 'authorized-by', 'instruction-ref'],
   'freeze accept': ['requirement', 'reason', 'authorized-by', 'instruction-ref'],
@@ -129,11 +155,14 @@ const ORIGINAL_COMMAND_OPTION_WHITELIST = new Map(Object.entries({
   'telemetry aggregate': [],
   'guard shared-env': ['stage', 'target', 'requirement', 'commit', 'dry-run', 'issue-ticket', 'release-approval'],
   'deployment record': ['requirement', 'snapshot'],
+  'deployment resume': ['requirement', 'snapshot'],
   'lifecycle advance': ['to', 'dry-run'],
   'lifecycle next': ['dry-run'],
   'lifecycle batch-next': ['dry-run'],
   'lifecycle fail': ['reason', 'evidence-sha'],
   'lifecycle rework': ['kind', 'reason', 'instruction-ref'],
+  'lifecycle enable-acceptance': ['reason'],
+  'lifecycle rework-batch': ['batch'],
   'review prepare': ['stage'],
   'review show': ['stage'],
   'review record': ['stage', 'report'],

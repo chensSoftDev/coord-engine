@@ -202,6 +202,20 @@ test('evidence-neutral: a matching immutable stage review report may be added af
   assert.equal(classify(env, modified).valid, false, 'add-then-edit cannot look like one additive review from the tested commit');
 });
 
+test('attempt reports are additive while E2E-only launcher inputs still require testing', t => {
+  const env = setupPolicyFixture(t);
+  const folder = join(env.cwd, REQUIREMENT_DIR, 'acceptance', 'attempt-1234567890abcdef');
+  mkdirSync(folder, { recursive: true });
+  writeFileSync(join(folder, 'UI_ACCEPTANCE.json'), '{"schemaVersion":1,"requirementId":"I-002"}\n');
+  const added = commitChange(env.cwd, 'test: attempt report');
+  assert.equal(classify(env, added).classification, 'evidence-neutral');
+  writeFileSync(join(env.cwd, 'scripts/local-e2e.mjs'), '// changed test selection\n');
+  const testInput = commitChange(env.cwd, 'test: E2E launcher');
+  assert.equal(classifyRevisionRange({ cwd: env.cwd, requirementId: REQUIREMENT_ID, fromSha: added, toSha: testInput }).classification, 'deployment-neutral');
+  writeFileSync(join(env.cwd, 'scripts/deploy.sh'), '# runtime deployment changed\n');
+  assert.equal(classify(env, commitChange(env.cwd, 'test: real deploy')).classification, 'runtime-affecting');
+});
+
 test('evidence-neutral: committed interaction report and visual screenshots close testing without changing test inputs', t => {
   const env = setupPolicyFixture(t);
   const imageRoot = join(env.cwd, REQUIREMENT_DIR, 'reviews', 'screenshots');
@@ -578,4 +592,13 @@ test('hard fail: co-branch requirement BACKLOG core cells stay frozen', (t) => {
   const result = classify(env, head);
   assert.equal(result.valid, false);
   assert.equal(result.code, 'REVISION_POLICY_HARDFAIL');
+});
+
+test('I-263: E2E expectation changes require fresh tests without redeploying services', t => {
+  const env = setupPolicyFixture(t);
+  writeFileSync(join(env.cwd, REQUIREMENT_DIR, 'E2E_EXPECTATIONS.json'), JSON.stringify({ schemaVersion: 1, requirementId: REQUIREMENT_ID, runs: [] }));
+  const result = classify(env, commitChange(env.cwd, 'test: declare exact E2E coverage'));
+  assert.equal(result.classification, 'deployment-neutral');
+  assert.equal(result.evidenceNeutral, false);
+  assert.equal(result.deploymentNeutral, true);
 });
