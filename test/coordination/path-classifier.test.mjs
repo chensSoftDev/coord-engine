@@ -95,6 +95,19 @@ const CASES = [
     },
   },
   {
+    name: 'production order domain shared runtime package affects admin and api only',
+    paths: ['packages/production-order-domain/src/types.ts'],
+    expected: {
+      affectedServices: ['admin', 'api'],
+      blockingChecks: ['service:admin', 'service:api'],
+      asyncChecks: ['full-regression'],
+      candidateRuntimePaths: ['packages/production-order-domain/src/types.ts'],
+      riskTags: [],
+      docsOnly: false,
+      unknownPaths: [],
+    },
+  },
+  {
     name: 'api migration adds migration check and risk tag',
     paths: ['apps/api/src/database/migrations/1750000000000-AddTable.ts'],
     expected: {
@@ -252,12 +265,28 @@ const CASES = [
   },
   {
     name: 'container build inputs rebuild every service and run release contracts',
-    paths: ['docker-compose.yml', 'apps/api/Dockerfile', '.dockerignore'],
+    paths: ['docker-compose.yml', 'apps/api/Dockerfile'],
     expected: {
       affectedServices: ALL_SERVICES,
       blockingChecks: ['release-contracts', ...ALL_SERVICE_CHECKS],
       asyncChecks: ['full-regression'],
-      candidateRuntimePaths: ['.dockerignore', 'apps/api/Dockerfile', 'docker-compose.yml'],
+      candidateRuntimePaths: ['apps/api/Dockerfile', 'docker-compose.yml'],
+      riskTags: ['container-build'],
+      docsOnly: false,
+      unknownPaths: [],
+    },
+  },
+  {
+    // F-270 review (R08)：仓库元数据与发布工件脚本是 release tooling——
+    // release-contracts 检查闭合，但不映射任何服务，不得把 main 上后合的
+    // housekeeping 变更 fail closed 成全服务发布。
+    name: 'repository metadata and release artifact tooling run release contracts without services',
+    paths: ['.gitignore', '.dockerignore', 'scripts/release-artifacts.mjs', 'scripts/lib/release-artifacts.mjs'],
+    expected: {
+      affectedServices: [],
+      blockingChecks: ['release-contracts'],
+      asyncChecks: [],
+      candidateRuntimePaths: ['.dockerignore'],
       riskTags: ['container-build'],
       docsOnly: false,
       unknownPaths: [],
