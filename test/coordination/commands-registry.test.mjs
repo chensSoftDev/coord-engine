@@ -161,7 +161,7 @@ const ORIGINAL_COMMAND_OPTION_WHITELIST = new Map(Object.entries({
   'lifecycle batch-next': ['dry-run'],
   'lifecycle fail': ['reason', 'evidence-sha'],
   'lifecycle rework': ['kind', 'reason', 'instruction-ref'],
-  'lifecycle enable-acceptance': ['reason'],
+  'lifecycle enable-acceptance': ['reason', 'ux-bridge-sha'],
   'lifecycle rework-batch': ['batch'],
   'review prepare': ['stage'],
   'review show': ['stage'],
