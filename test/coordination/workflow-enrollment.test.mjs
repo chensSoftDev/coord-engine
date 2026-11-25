@@ -12,6 +12,10 @@ test('new claims and starts activate full scenario handoff without enrolling old
   assert.equal(snapshot.readJson(`requirements/${claimed.id}.json`).scenarioAcceptanceVersion, 1);
   const started = await startRequirement({ ...args, title: '采购业务验收', topic: 'procurement-acceptance', migration: 'no', version: 'v0.9.1' });
   assert.equal(snapshot.readJson(`requirements/${started.id}.json`).scenarioAcceptanceVersion, 1);
+  assert.equal(snapshot.readJson(`requirements/${claimed.id}.json`).uxItemAcceptanceVersion, 1);
+  assert.equal(snapshot.readJson(`requirements/${started.id}.json`).uxItemAcceptanceVersion, 1);
+  const tooling = await claimRequirement({ ...args, profile: 'tooling', uxImpact: 'none', title: '协调工具验收' });
+  assert.equal(snapshot.readJson(`requirements/${tooling.id}.json`).uxItemAcceptanceVersion, undefined);
   const legacy = await claimRequirement({ ...args, workflowVersion: undefined, title: '既有协议兼容' });
   assert.equal(snapshot.readJson(`requirements/${legacy.id}.json`).scenarioAcceptanceVersion, undefined);
 });
